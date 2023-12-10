@@ -1,13 +1,11 @@
 import argparse
 import numpy as np
 import math
-import zlib
 import pandas as pd
 from llm import LLM
 from transformers.generation.logits_process import LogitsProcessor, LogitsProcessorList
 import torch
-
-'''Named Huggingface models are assumed to be located at ~/.cache/huggingface/hub'''
+import zlib
 
 def do_zlib(text:str):
     return np.log(len(zlib.compress(bytes(text, 'utf-8'))))
@@ -28,18 +26,13 @@ class DecayingTemperatureWarper(LogitsProcessor):
         return scores
     
 def parse_commoncrawl(wetfile):
-    """
-    Quick and ugly parsing of a WET file.
-    Tested for the May 2021 crawl.
-    """
     with open(wetfile) as f:
         lines = f.readlines() 
     
     start_idxs = [i for i in range(len(lines)) if "WARC/1.0" in lines[i]]
-    
     all_eng = ""
-
     count_eng = 0
+
     for i in range(len(start_idxs)-1):
         start = start_idxs[i]
         end = start_idxs[i+1]
@@ -51,9 +44,9 @@ def parse_commoncrawl(wetfile):
     return all_eng
 
 def main(args):
-    print("Loading models...")
+    print("Loading model...")
     target_model = LLM(args.target)
-    print(torch.cuda.get_device_name(torch.cuda.current_device()))
+    print(torch.cuda.get_device_name(target_model.device))
 
     # number of tokens to generate and top k sampling tuning parameters
     seq_len = 256
@@ -70,7 +63,7 @@ def main(args):
         logits_warper = LogitsProcessorList([DecayingTemperatureWarper(10.0)])
 
         for batch in range(num_batches):
-            print(f"\nBatch number: {batch} of {num_batches}.\n")
+            print(f"\nBatch number: {batch+1} of {num_batches}.\n")
 
             prompts = [target_model.tokenizer.eos_token] * args.batchsize
             inputs = target_model.tokenizer(prompts, return_tensors="pt", padding=True).to(target_model.device)
@@ -146,43 +139,30 @@ def main(args):
     
     print("\nCalculating target model perplexity.")
     out_df['target_px'] = [target_model.calculate_perplexity(x) for x in out_df.text.to_list()]
-    #out_df['target_px'] = out_df.text.apply(target_model.calculate_perplexity)
     
     print("Calculating lower case target model perplexity.")
     out_df['target_px_lw'] = [target_model.calculate_perplexity(x.lower()) for x in out_df.text.to_list()]
-    #out_df['target_px_lw'] = out_df.text.str.lower().apply(target_model.calculate_perplexity)
-    
-    # this is an extremely expensive operation, feel free to skip.
+       
     print("Calculating minimum sliding window perplexity.")
-    out_df['sliding_px'] = out_df.text.apply(target_model.calculate_perplexity_sliding)
+    out_df['sliding_px'] = [target_model.calculate_perplexity_sliding(x) for x in out_df.text.to_list()]
 
-    # remove target model, free up GPU for next model.
-    del(target_model)
-
-    if args.reference:
-         print('Evaluating reference model.')
-         ref_model = LLM(args.reference)
-         out_df['ref_px'] = [ref_model.calculate_perplexity(x) for x in out_df.text.to_list()]
-         out_df['target_to_ref'] = out_df.target_px / out_df.ref_px
+    out_df['target_to_lower'] = out_df.target_px / out_df.sliding_px
 
     print("Calculating zlib entropy.")
     out_df['zlib_ent'] = out_df.text.apply(do_zlib)
     out_df['target_to_zlib'] = out_df.target_px / out_df.zlib_ent
-    
-    out_df['target_to_lower'] = out_df.target_px / out_df.sliding_px
 
-    out_df.to_csv(args.outfile)
+    out_df.to_csv(args.outfile, index=False)
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--target', default="EleutherAI/gpt-neo-2.7B", type=str, help='Model name to generate samples from.')
-    parser.add_argument('--reference', default="EleutherAI/gpt-neo-125m", type=str, help='Model to comapre perplexity against.')
     parser.add_argument('--k', default=2000, type=int, help='Number of samples to generate.')
     parser.add_argument('--batchsize', default=5, type=int, help='Batch size for generation.')
     parser.add_argument('--outfile', type=str, help='Output csv cotaining all calcualted metrics and generated text samples.')
     parser.add_argument('--wetfile', type=str, help='Path to Commoncrawl WET file')
-    parser.add_argument('--dotemp', type=str, help='Do temperature decay in sample generation')
+    parser.add_argument('--dotemp', action='store_true', help='Do temperature decay in sample generation')
 
     args = parser.parse_args()
 
