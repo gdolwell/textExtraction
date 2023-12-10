@@ -12,7 +12,7 @@ def main(args):
     out_df = pd.read_csv(args.infile)
 
     print('Evaluating reference model.')
-    out_df[model_name] = [ref_model.calculate_perplexity(x) for x in out_df.text.to_list()]
+    out_df[model_name] = [ref_model.calculate_perplexity(str(x)) for x in out_df.text.to_list()]
     out_df['target_to_{ref}'.format(ref=model_name)] = out_df.target_px / out_df[model_name]
 
     out_df.to_csv(args.outfile, index=False)
